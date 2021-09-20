@@ -1,0 +1,228 @@
+
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.cluster import MiniBatchKMeans
+import random
+from sklearn.neighbors import NearestNeighbors
+import numpy as np
+import collections
+from collections import Counter
+from sklearn.neighbors import KNeighborsClassifier
+import os;
+import pandas as pd
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.model_selection import cross_val_score
+from sklearn.model_selection import RepeatedStratifiedKFold
+from numpy import mean
+from matplotlib import pyplot
+
+
+
+class RCSmoteKClasses:
+
+    def __init__(self, k = 3, nu = 3):
+        self.k = k
+        self.nu = nu
+
+
+    def rknn(self,sample):
+        n_nu = self.k
+        nnarray = []
+        neighbors = NearestNeighbors(n_neighbors=n_nu + 1).fit(sample)
+        for i in range(len(sample)):
+            temp = neighbors.kneighbors(sample[i].reshape(1, -1), return_distance=False)[0]
+            temp = np.delete(temp, 0)
+            # 有 array 存放 各個點的鄰近點
+            nnarray.append(temp)
+
+        return nnarray  # 回傳相近的點 分別是在第幾個
+
+    def find_maj(self, sample_class):
+        counter = Counter(sample_class);
+        maj = list(dict(counter.most_common(1)).keys())
+        # maj = "".join(maj)
+        return maj
+
+    def classprocess(self, y):
+        counter = Counter(y)
+
+        c = Counter(y)
+        datagap = []
+        maj = self.find_maj(y)
+        maj_num = dict(c)[self.find_maj(y)]
+        for className, number in counter.items():
+            # print(className," ",number)
+            temp = np.array([className, (maj_num - number)])
+            datagap.append(temp)
+        return datagap
+
+
+    def check_point_type(self, n_nu, X, y, inminority = True):
+        point_type = []  # 放個點是屬於什麼類型的 border safe noisy
+        n = 0
+        b = 0
+        s = 0
+        maj = self.find_maj(y) # 大類
+        point = self.rknn(X)  # 回傳所有點鄰近 n_nu 個點
+        for index, i in enumerate(point):
+            maj_nu = 0
+            if y[index] == maj and inminority == True:
+                continue
+            for j in point[index]:
+                if y[j] == maj:
+                    maj_nu += 1
+            if maj_nu == n_nu:
+                point_type.append("noisy")
+                n += 1
+            elif (n_nu / 2 < maj_nu and maj_nu < n_nu):
+                point_type.append("border")
+                b += 1
+            else:
+                point_type.append("safe");
+                s += 1
+        print("noisy", n, "\nborder", b, "\nsafe", s, "\nall", n + b + s)
+        return point_type
+
+    def split_BS_Majdata(self, point_type,sample,sample_class):
+        BS_sample = []
+        Maj_sample = []
+        return_sample = []
+        maj = self.find_maj(sample_class)  # 大類
+        # maj = "".join(maj)
+        for i in range(len(sample_class)):
+            # print(sample_class[i])
+
+            if (sample_class[i] == maj):
+                Maj_sample.append(sample[i])
+
+            elif (sample_class[i] != maj and point_type[i] != "noisy"):
+                BS_sample.append(sample[i])
+        return_sample = np.array([BS_sample, Maj_sample])
+
+        return return_sample
+
+    def index_split_BS_Majdata(self, point_type, X, y):  # maj 以及 BS set 在原本 data 的 index
+        BS_sample = []
+        Maj_sample = []
+        return_sample = []
+        maj = self.find_maj(y)  # 大類
+        # maj = "".join(maj)
+        for i in range(len(y)):
+            # print(sample_class[i])
+            if (y[i] == maj):
+                Maj_sample.append(i)
+
+            elif (y[i] != maj and point_type[i] != "noisy"):
+                BS_sample.append(i)
+        return_sample = np.array([BS_sample, Maj_sample])
+
+        return return_sample
+
+    def range_value(self, n_nu, X, y):
+        point_type = self.check_point_type(n_nu, X, y, False)
+        index = self.index_split_BS_Majdata(point_type, X, y)
+        BS_max = []
+        Maj_min = []
+        all_value = []
+        for i in range(len(X[0])):  # loop 屬性
+            for j in range(2):  # loop data
+                if (j == 0):  # BS set 的 index
+                    BS_index = index[j]
+                    max_value = np.max(X[BS_index][i]);
+                    BS_max.append(max_value)
+                else:
+                    Maj_index = index[j]
+                    min_value = np.min(X[Maj_index][i]);
+                    Maj_min.append(min_value)
+        # temp = np.array([BS_max,Maj_min])
+        range_value = [(BS_max[i] - Maj_min[i]) / 2 for i in range(len(BS_max))]
+        all_value = np.array([BS_max, Maj_min, range_value])
+        return all_value
+
+    def getBSnn_Majnn(self, n_nu, X, y):
+        point_type = self.check_point_type(n_nu, X, y, False)  # 得知所有 sample 中屬於 border 的
+        index = self.index_split_BS_Majdata(point_type, X, y)
+        k = self.rknn(X)
+        BSnn = []
+        Majnn = []
+        # 用 border sample 的 index
+        for i, element in enumerate(point_type):
+            if (element == "border"):
+                for j in range(2):
+                    for w in index[j]:
+                        if (j == 0 and i == w):
+                            BSnn.append(k[w])
+                        elif (j == 1 and i == w):
+                            Majnn.append(k[w])
+
+        temp = np.array([BSnn, Majnn]);
+        print(len(temp[0] + temp[1]))
+        return temp
+
+    def Populate(self, r, BSnn, Majnn, Range, P_max, sample, classbelong):
+        # r 代表要產生的資料的數量 論文定義該數量為增加小類至跟大類相同的數量 達成 50% (大類減小類的數量)
+        Bl = len(BSnn) - 1
+        nn_nu = len(BSnn[0]) - 1
+        Ml = len(Majnn) - 1
+        Synthetic = []
+        while (r > 0):
+
+            s1row = random.randint(0, Bl)
+            s1col = random.randint(0, nn_nu)
+            s1 = BSnn[s1row][s1col]
+            s2row = random.randint(0, Ml)
+            s2col = random.randint(0, nn_nu)
+            s2 = Majnn[s2row][s2col]
+            min_attr = []
+            for i in range(len(sample[0])):
+
+                if (sample[s1][i] < sample[s2][i]):
+                    min_attr.append(sample[s1][i])
+                else:
+                    min_attr.append(sample[s2][i])
+            diff = [(P_max[i] - min_attr[i]) for i in range(len(P_max))]
+            # print("diff",diff)
+            gap = random.uniform(0, 0.5)
+            var = [(diff[i] * gap) for i in range(len(diff))]
+            temp = []
+            for i in range(len(sample[0])):
+                if (min_attr[i] + var[i] <= Range[i]):
+                    temp.append(min_attr[i] + var[i])
+                else:
+                    temp.append(P_max[i] - var[i])
+            #temp.append(classbelong)
+            Synthetic.append(temp)
+            r = r - 1
+        return Synthetic
+
+    def fit_resample(self, X, y, ir = 1.):
+        #karray = self.rknn(X)
+        tmp = self.find_maj(y)
+        #point_type = self.check_point_type(self.nu, X, y, True)  # 論文使用 knn 為 3
+        #split_BS_Majdata(point_type,finaldata,output)
+        needToGenerate = 232
+        #print (self.classprocess(y)) # classprocess 这玩意就是生成数量
+        c = Counter(y)
+        diff = c[0] - c[1]
+        BSnn = self.getBSnn_Majnn(3, X,y)[0]
+        Majnn = self.getBSnn_Majnn(3, X,y)[1]
+        #Range = self.range_value(3, X,y)
+        P_max = self.range_value(3, X,y)[0]
+        Range = self.range_value(3, X,y)[2]
+
+
+
+        over = self.Populate(int(diff), BSnn, Majnn, Range, P_max, X, 1)
+        X1 = list(X)
+        y1 = list(y)
+        #import copy
+        #Xori = copy.deepcopy(X)
+        for i in range(0, len(over)):
+            X1.append(over[i])
+            y1.append(1)
+
+
+        z = 1
+        return np.array(X1),np.array(y1)
+
+
+
